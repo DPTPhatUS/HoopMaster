@@ -30,6 +30,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -85,10 +86,10 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     }
 
     override fun onInit(status: Int) {
-        if (status == TextToSpeech.SUCCESS) {
-            isTtsReady = textToSpeech?.setLanguage(Locale.US) != TextToSpeech.LANG_MISSING_DATA
+        isTtsReady = if (status == TextToSpeech.SUCCESS) {
+            textToSpeech?.setLanguage(Locale.US) != TextToSpeech.LANG_MISSING_DATA
         } else {
-            isTtsReady = false
+            false
         }
     }
 
@@ -188,30 +189,52 @@ private fun HoopMasterApp(viewModel: HoopViewModel) {
                 colors = CardDefaults.cardColors(containerColor = Color(0xCC111827))
             ) {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    OutlinedTextField(
-                        value = state.baseUrl,
-                        onValueChange = viewModel::onBaseUrlChanged,
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text("Backend URL") },
-                        singleLine = true,
-                        enabled = state.sessionId == null
-                    )
+                    if (state.sessionId == null) {
+                        OutlinedTextField(
+                            value = state.baseUrl,
+                            onValueChange = viewModel::onBaseUrlChanged,
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text("Backend URL") },
+                            singleLine = true,
+                            enabled = true,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedTextColor = Color.White,
+                                unfocusedTextColor = Color.White,
+                                focusedBorderColor = Color.White,
+                                unfocusedBorderColor = Color.White,
+                                focusedLabelColor = Color.White,
+                                unfocusedLabelColor = Color.White
+                            )
+                        )
+                    }
 
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                        Button(onClick = viewModel::connect, enabled = state.sessionId == null && !state.isConnecting) {
-                            Text(if (state.isConnecting) "Connecting..." else "Connect")
-                        }
-                        Button(onClick = viewModel::startSession, enabled = state.sessionId != null && !state.sessionActive) {
-                            Text("Start")
-                        }
-                        Button(onClick = viewModel::stopSession, enabled = state.sessionActive) {
-                            Text("Stop")
-                        }
-                        Button(onClick = viewModel::resetSession, enabled = state.sessionId != null) {
-                            Text("Reset")
-                        }
-                        Button(onClick = viewModel::disconnect, enabled = state.sessionId != null) {
-                            Text("Disconnect")
+                    Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+                        if (state.sessionId == null) {
+                            Button(
+                                onClick = viewModel::connect,
+                                enabled = !state.isConnecting
+                            ) {
+                                Text(if (state.isConnecting) "Connecting..." else "Connect")
+                            }
+                        } else {
+                            Button(
+                                onClick = viewModel::startSession,
+                                enabled = !state.sessionActive
+                            ) {
+                                Text("Start")
+                            }
+                            Button(
+                                onClick = viewModel::stopSession,
+                                enabled = state.sessionActive
+                            ) {
+                                Text("Stop")
+                            }
+                            Button(onClick = viewModel::resetSession) {
+                                Text("Reset")
+                            }
+                            Button(onClick = viewModel::disconnect) {
+                                Text("URL")
+                            }
                         }
                     }
 
