@@ -14,18 +14,6 @@ Hoop Master is an Android app that streams camera frames to the Hoop Master back
 2. In Android emulator, use `http://10.0.2.2:8000` as Backend URL in the app.
 3. Build and run app.
 
-### Build
-```sh
-cd /home/dptphat/AndroidStudioProjects/HoopMaster
-./gradlew :app:assembleDebug
-```
-
-### Install on connected device/emulator
-```sh
-cd /home/dptphat/AndroidStudioProjects/HoopMaster
-./gradlew :app:installDebug
-```
-
 ## Notes
 - `CAMERA` and `INTERNET` permissions are required.
 - Local cleartext HTTP is enabled for development.
