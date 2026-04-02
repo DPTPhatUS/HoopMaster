@@ -9,11 +9,6 @@ Hoop Master is an Android app that streams camera frames to the Hoop Master back
 - Live backend event handling from WebSocket
 - TextToSpeech voice feedback for each `throw_event`
 
-## Backend Contract
-This app follows the API in:
-
-`/home/dptphat/HCMUS/25-26/II/Human-Computer Interaction/Assignments/PA3/hoop-master/API.md`
-
 ## Quick Start
 1. Start backend at `http://127.0.0.1:8000`.
 2. In Android emulator, use `http://10.0.2.2:8000` as Backend URL in the app.
@@ -35,4 +30,3 @@ cd /home/dptphat/AndroidStudioProjects/HoopMaster
 - `CAMERA` and `INTERNET` permissions are required.
 - Local cleartext HTTP is enabled for development.
 - The app currently uses the back camera and streams compressed JPEG frames every ~300ms.
-
