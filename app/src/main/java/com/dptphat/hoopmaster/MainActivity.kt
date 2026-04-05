@@ -23,16 +23,23 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -49,6 +56,8 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
@@ -56,11 +65,15 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.rememberNavController
 import com.dptphat.hoopmaster.camera.imageProxyToJpeg
 import com.dptphat.hoopmaster.ui.theme.HoopMasterTheme
 import kotlinx.coroutines.launch
 import java.util.Locale
 import java.util.concurrent.Executors
+import kotlin.math.roundToInt
 
 class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     private val viewModel: HoopViewModel by viewModels()
@@ -110,11 +123,223 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     }
 }
 
+private object AppRoute {
+    const val Home = "home"
+    const val VolumeTest = "volume_test"
+    const val CurrentSession = "current_session"
+    const val SessionResults = "session_results"
+}
+
 @Composable
 private fun HoopMasterApp(viewModel: HoopViewModel) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
-    val context = LocalContext.current
+    val navController = rememberNavController()
 
+    NavHost(
+        navController = navController,
+        startDestination = AppRoute.Home
+    ) {
+        composable(AppRoute.Home) {
+            HomeScreen(
+                state = state,
+                onNewPractice = {
+                    viewModel.disconnect()
+                    navController.navigate(AppRoute.VolumeTest)
+                }
+            )
+        }
+        composable(AppRoute.VolumeTest) {
+            VolumeTestScreen(onSkip = { navController.navigate(AppRoute.CurrentSession) })
+        }
+        composable(AppRoute.CurrentSession) {
+            CurrentSessionScreen(
+                state = state,
+                viewModel = viewModel,
+                onSessionStopped = {
+                    navController.navigate(AppRoute.SessionResults) {
+                        popUpTo(AppRoute.CurrentSession) { inclusive = true }
+                    }
+                }
+            )
+        }
+        composable(AppRoute.SessionResults) {
+            SessionResultsScreen(
+                state = state,
+                onHome = {
+                    viewModel.disconnect()
+                    navController.navigate(AppRoute.Home) {
+                        popUpTo(AppRoute.Home) { inclusive = true }
+                        launchSingleTop = true
+                    }
+                }
+            )
+        }
+    }
+}
+
+@Composable
+private fun HomeScreen(
+    state: HoopUiState,
+    onNewPractice: () -> Unit
+) {
+    val progress = (state.weeklyTotalShots.toFloat() / state.weeklyGoal.toFloat()).coerceIn(0f, 1f)
+
+    Scaffold(
+        modifier = Modifier.fillMaxSize(),
+        bottomBar = {
+            NavigationBar {
+                NavigationBarItem(
+                    selected = true,
+                    onClick = {},
+                    icon = { Icon(painterResource(id = android.R.drawable.ic_menu_view), contentDescription = "Home") },
+                    label = { Text("Home") }
+                )
+                NavigationBarItem(
+                    selected = false,
+                    onClick = {},
+                    icon = { Icon(painterResource(id = android.R.drawable.ic_menu_recent_history), contentDescription = "History") },
+                    label = { Text("History") }
+                )
+                NavigationBarItem(
+                    selected = false,
+                    onClick = {},
+                    icon = { Icon(painterResource(id = android.R.drawable.ic_menu_myplaces), contentDescription = "Profile") },
+                    label = { Text("Profile") }
+                )
+            }
+        }
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .padding(horizontal = 24.dp, vertical = 20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(20.dp)
+        ) {
+            Text(text = "Hoop Master", style = MaterialTheme.typography.headlineMedium)
+
+            Box(contentAlignment = Alignment.Center, modifier = Modifier.size(170.dp)) {
+                CircularProgressIndicator(
+                    progress = { progress },
+                    modifier = Modifier.fillMaxSize(),
+                    strokeWidth = 14.dp
+                )
+                Text(
+                    text = "${(progress * 100).toInt()}%",
+                    style = MaterialTheme.typography.headlineMedium
+                )
+            }
+
+            Text(
+                text = "Target this week: ${state.weeklyGoal} shots",
+                style = MaterialTheme.typography.titleMedium
+            )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                WeeklyInfoCard(
+                    modifier = Modifier.weight(1f),
+                    title = "Accuracy",
+                    value = "${state.weeklyAccuracyPercent}%"
+                )
+                WeeklyInfoCard(
+                    modifier = Modifier.weight(1f),
+                    title = "Total Shots",
+                    value = state.weeklyTotalShots.toString()
+                )
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Button(
+                onClick = onNewPractice,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(58.dp),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Text("New practice session", style = MaterialTheme.typography.titleMedium)
+            }
+        }
+    }
+}
+
+@Composable
+private fun WeeklyInfoCard(
+    modifier: Modifier,
+    title: String,
+    value: String
+) {
+    Card(modifier = modifier, shape = RoundedCornerShape(14.dp)) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 16.dp, horizontal = 10.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Text(text = title, style = MaterialTheme.typography.titleSmall)
+            Text(text = value, style = MaterialTheme.typography.titleLarge)
+            Text(text = "This Week", style = MaterialTheme.typography.bodySmall)
+        }
+    }
+}
+
+@Composable
+private fun VolumeTestScreen(onSkip: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 24.dp, vertical = 28.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(22.dp)
+    ) {
+        Text(text = "Hoop Master", style = MaterialTheme.typography.headlineMedium)
+        Icon(
+            painter = painterResource(id = android.R.drawable.ic_btn_speak_now),
+            contentDescription = "Headphones",
+            modifier = Modifier.size(140.dp)
+        )
+        Text(
+            text = "Connect Bluetooth\nEarbuds",
+            style = MaterialTheme.typography.headlineSmall,
+            textAlign = TextAlign.Center
+        )
+        Button(
+            onClick = {},
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(56.dp),
+            shape = RoundedCornerShape(14.dp)
+        ) {
+            Text("Test Volume", modifier = Modifier.weight(1f), textAlign = TextAlign.Center)
+            Icon(
+                painter = painterResource(id = android.R.drawable.ic_lock_silent_mode_off),
+                contentDescription = "Volume"
+            )
+        }
+        Button(
+            onClick = onSkip,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(56.dp),
+            shape = RoundedCornerShape(14.dp)
+        ) {
+            Text("Skip")
+        }
+    }
+}
+
+@Composable
+private fun CurrentSessionScreen(
+    state: HoopUiState,
+    viewModel: HoopViewModel,
+    onSessionStopped: () -> Unit
+) {
+    val context = LocalContext.current
     var hasCameraPermission by remember {
         mutableStateOf(
             ContextCompat.checkSelfPermission(
@@ -123,147 +348,197 @@ private fun HoopMasterApp(viewModel: HoopViewModel) {
             ) == PackageManager.PERMISSION_GRANTED
         )
     }
-
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission(),
         onResult = { granted -> hasCameraPermission = granted }
     )
+    var waitingForStop by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         if (!hasCameraPermission) {
             permissionLauncher.launch(Manifest.permission.CAMERA)
         }
+        viewModel.ensureConnected()
     }
 
-    Scaffold(modifier = Modifier.fillMaxSize()) { padding ->
-        Box(
+    LaunchedEffect(hasCameraPermission) {
+        if (hasCameraPermission) {
+            viewModel.ensureConnected()
+        }
+    }
+
+    LaunchedEffect(waitingForStop, state.sessionActive, state.sessionCompleted) {
+        if (waitingForStop && !state.sessionActive && state.sessionCompleted) {
+            waitingForStop = false
+            onSessionStopped()
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Brush.verticalGradient(colors = listOf(Color(0xFF07132A), Color(0xFF101D3A))))
+    ) {
+        if (hasCameraPermission) {
+            CameraFeed(
+                modifier = Modifier.fillMaxSize(),
+                onFrame = { bytes -> viewModel.sendFrame(bytes) }
+            )
+        } else {
+            PermissionHint(
+                modifier = Modifier.fillMaxSize(),
+                onRequestPermission = { permissionLauncher.launch(Manifest.permission.CAMERA) }
+            )
+        }
+
+        Surface(
             modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .background(
-                    brush = Brush.verticalGradient(
-                        colors = listOf(Color(0xFF07132A), Color(0xFF101D3A))
-                    )
-                )
+                .fillMaxWidth()
+                .align(Alignment.TopCenter)
+                .padding(16.dp)
+                .alpha(0.9f),
+            shape = RoundedCornerShape(16.dp),
+            color = Color(0xAA000000)
         ) {
-            if (hasCameraPermission) {
-                CameraFeed(
-                    modifier = Modifier.fillMaxSize(),
-                    onFrame = { bytes -> viewModel.sendFrame(bytes) }
-                )
-            } else {
-                PermissionHint(
-                    modifier = Modifier.fillMaxSize(),
-                    onRequestPermission = { permissionLauncher.launch(Manifest.permission.CAMERA) }
-                )
+            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(text = "Hoop Master", style = MaterialTheme.typography.titleLarge, color = Color.White)
+                Text(text = "Status: ${state.statusMessage}", color = Color(0xFFD3E3FF))
+                Text(text = "Throws: ${state.throwCount} | Points: ${state.totalPoints}", color = Color(0xFFC7D2FE))
             }
+        }
 
-            Surface(
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .align(Alignment.BottomCenter)
+                .padding(16.dp),
+            shape = RoundedCornerShape(20.dp),
+            colors = CardDefaults.cardColors(containerColor = Color(0xCC111827))
+        ) {
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .align(Alignment.TopCenter)
-                    .padding(16.dp)
-                    .alpha(0.9f),
-                shape = RoundedCornerShape(16.dp),
-                color = Color(0xAA000000)
-            ) {
-                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(text = "Hoop Master", style = MaterialTheme.typography.titleLarge, color = Color.White)
-                    Text(
-                        text = "Status: ${state.statusMessage}",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = Color(0xFFD3E3FF)
-                    )
-                    Text(
-                        text = "Session: ${state.sessionId ?: "not connected"}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Color(0xFFB2C5EE)
-                    )
-                }
-            }
-
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .align(Alignment.BottomCenter)
                     .padding(16.dp),
-                shape = RoundedCornerShape(20.dp),
-                colors = CardDefaults.cardColors(containerColor = Color(0xCC111827))
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    if (state.sessionId == null) {
-                        OutlinedTextField(
-                            value = state.baseUrl,
-                            onValueChange = viewModel::onBaseUrlChanged,
-                            modifier = Modifier.fillMaxWidth(),
-                            label = { Text("Backend URL") },
-                            singleLine = true,
-                            enabled = true,
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedTextColor = Color.White,
-                                unfocusedTextColor = Color.White,
-                                focusedBorderColor = Color.White,
-                                unfocusedBorderColor = Color.White,
-                                focusedLabelColor = Color.White,
-                                unfocusedLabelColor = Color.White
-                            )
-                        )
-                    }
-
-                    Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
-                        if (state.sessionId == null) {
-                            Button(
-                                onClick = viewModel::connect,
-                                enabled = !state.isConnecting
-                            ) {
-                                Text(if (state.isConnecting) "Connecting..." else "Connect")
-                            }
+                Button(
+                    onClick = {
+                        if (state.sessionActive) {
+                            waitingForStop = true
+                            viewModel.stopSession()
                         } else {
-                            Button(
-                                onClick = viewModel::startSession,
-                                enabled = !state.sessionActive
-                            ) {
-                                Text("Start")
-                            }
-                            Button(
-                                onClick = viewModel::stopSession,
-                                enabled = state.sessionActive
-                            ) {
-                                Text("Stop")
-                            }
-                            Button(onClick = viewModel::resetSession) {
-                                Text("Reset")
-                            }
-                            Button(onClick = viewModel::disconnect) {
-                                Text("URL")
-                            }
+                            viewModel.startSession()
                         }
-                    }
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(58.dp),
+                    enabled = state.sessionId != null && !state.isConnecting,
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Text(if (state.sessionActive) "Stop Session" else "Start Practice")
+                }
 
+                Text(
+                    text = "Make sure your whole body is visible in camera view.",
+                    textAlign = TextAlign.Center,
+                    color = Color.White,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+
+                state.errorMessage?.let { error ->
                     Text(
-                        text = "Event WS: ${state.eventsConnected} | Video WS: ${state.videoConnected} | Camera(active): ${state.cameraConnected}",
+                        text = error,
+                        color = Color(0xFFFCA5A5),
                         style = MaterialTheme.typography.bodySmall,
-                        color = Color(0xFFC7D2FE)
+                        textAlign = TextAlign.Center
                     )
-                    Text(
-                        text = "Throws: ${state.throwCount} | Points: ${state.totalPoints} | Target: ${state.lastTarget}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Color(0xFFC7D2FE)
-                    )
-                    Text(
-                        text = "Live feedback: ${state.lastFeedback}",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = Color.White
-                    )
-                    state.errorMessage?.let { error ->
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SessionResultsScreen(
+    state: HoopUiState,
+    onHome: () -> Unit
+) {
+    val summary = state.lastSessionSummary ?: SessionResultSummary(
+        totalThrows = state.throwCount,
+        totalPoints = state.totalPoints,
+        noMistakeRate = state.weeklyAccuracyPercent.toDouble()
+    )
+    val mistakeLog = state.sessionLog.filter {
+        !it.mistakeTitle.equals("No mistake detected", ignoreCase = true)
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 20.dp, vertical = 20.dp)
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        Text(text = "Session Results", style = MaterialTheme.typography.headlineMedium)
+
+        Card(shape = RoundedCornerShape(16.dp)) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(text = "Total Throws: ${summary.totalThrows}", style = MaterialTheme.typography.titleMedium)
+                Text(text = "Total Points: ${summary.totalPoints}", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    text = "No-Mistake Rate: ${summary.noMistakeRate.roundToInt()}%",
+                    style = MaterialTheme.typography.titleMedium
+                )
+            }
+        }
+
+        Text(text = "Mistake Log", style = MaterialTheme.typography.titleLarge)
+
+        if (mistakeLog.isEmpty()) {
+            Card(shape = RoundedCornerShape(14.dp)) {
+                Text(
+                    text = "No mistakes logged in this session.",
+                    modifier = Modifier.padding(14.dp),
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
+        } else {
+            mistakeLog.forEach { entry ->
+                Card(shape = RoundedCornerShape(14.dp)) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
                         Text(
-                            text = error,
-                            color = Color(0xFFFCA5A5),
-                            style = MaterialTheme.typography.bodySmall
+                            text = "Throw #${entry.throwIndex}: ${entry.mistakeTitle}",
+                            style = MaterialTheme.typography.titleSmall
                         )
+                        Text(text = "Feedback: ${entry.feedback}", style = MaterialTheme.typography.bodySmall)
+                        Text(text = "Target: ${entry.target}", style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Button(
+            onClick = onHome,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(56.dp),
+            shape = RoundedCornerShape(14.dp)
+        ) {
+            Text("Home")
         }
     }
 }
@@ -355,10 +630,10 @@ private fun bindCameraUseCases(
 
     var lastFrameAt = 0L
     analysis.setAnalyzer(cameraExecutor) { imageProxy ->
-        imageProxy.use { imageProxy ->
+        imageProxy.use { imageProxyFrame ->
             val now = System.currentTimeMillis()
             if (now - lastFrameAt >= 300L) {
-                imageProxyToJpeg(imageProxy, jpegQuality = 55)?.let(onFrame)
+                imageProxyToJpeg(imageProxyFrame, jpegQuality = 55)?.let(onFrame)
                 lastFrameAt = now
             }
         }

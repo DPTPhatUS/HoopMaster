@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.dptphat.hoopmaster.backend.BackendEvent
 import com.dptphat.hoopmaster.backend.HoopBackendClient
+import com.dptphat.hoopmaster.backend.SessionSnapshot
 import okhttp3.WebSocket
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -15,9 +16,24 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
+
+data class SessionLogEntry(
+    val throwIndex: Int,
+    val mistakeTitle: String,
+    val feedback: String,
+    val target: String,
+    val points: Int
+)
+
+data class SessionResultSummary(
+    val totalThrows: Int,
+    val totalPoints: Int,
+    val noMistakeRate: Double
+)
 
 data class HoopUiState(
-    val baseUrl: String = "http://10.0.2.2:8000",
+    val defaultBaseUrl: String = "http://10.0.2.2:8000",
     val sessionId: String? = null,
     val isConnecting: Boolean = false,
     val eventsConnected: Boolean = false,
@@ -26,10 +42,15 @@ data class HoopUiState(
     val sessionCompleted: Boolean = false,
     val throwCount: Int = 0,
     val totalPoints: Int = 0,
+    val weeklyGoal: Int = 100,
+    val weeklyAccuracyPercent: Int = 0,
+    val weeklyTotalShots: Int = 0,
+    val sessionLog: List<SessionLogEntry> = emptyList(),
+    val lastSessionSummary: SessionResultSummary? = null,
     val cameraConnected: Boolean = false,
     val lastFeedback: String = "Waiting for throw feedback...",
     val lastTarget: String = "-",
-    val statusMessage: String = "Tap Connect to start",
+    val statusMessage: String = "Ready for practice",
     val errorMessage: String? = null
 )
 
@@ -50,8 +71,10 @@ class HoopViewModel : ViewModel() {
     private var lastSpokenFeedback: String = ""
     private var lastSpokenAtMillis: Long = 0L
 
-    fun onBaseUrlChanged(value: String) {
-        _uiState.update { it.copy(baseUrl = value.trim(), errorMessage = null) }
+    fun ensureConnected() {
+        val current = _uiState.value
+        if (current.isConnecting || current.sessionId != null) return
+        connect()
     }
 
     fun connect() {
@@ -70,7 +93,7 @@ class HoopViewModel : ViewModel() {
             }
 
             runCatching {
-                val snapshot = backendClient.createSession(current.baseUrl)
+                val snapshot = backendClient.createSession(current.defaultBaseUrl)
                 snapshot
             }.onSuccess { snapshot ->
                 _uiState.update {
@@ -79,9 +102,16 @@ class HoopViewModel : ViewModel() {
                         sessionId = snapshot.sessionId,
                         throwCount = snapshot.state.throws,
                         totalPoints = snapshot.state.totalPoints,
+                        weeklyTotalShots = snapshot.state.throws,
+                        weeklyAccuracyPercent = computeAccuracyPercent(
+                            throws = snapshot.state.throws,
+                            points = snapshot.state.totalPoints
+                        ),
                         sessionActive = snapshot.state.sessionActive,
                         sessionCompleted = snapshot.state.sessionCompleted,
                         cameraConnected = snapshot.camera.connected,
+                        sessionLog = emptyList(),
+                        lastSessionSummary = null,
                         statusMessage = "Session ${snapshot.sessionId.take(8)} connected"
                     )
                 }
@@ -115,8 +145,9 @@ class HoopViewModel : ViewModel() {
                 sessionCompleted = false,
                 throwCount = 0,
                 totalPoints = 0,
+                sessionLog = emptyList(),
                 cameraConnected = false,
-                statusMessage = "Disconnected",
+                statusMessage = "Ready for practice",
                 errorMessage = null,
                 lastFeedback = "Waiting for throw feedback...",
                 lastTarget = "-"
@@ -127,7 +158,7 @@ class HoopViewModel : ViewModel() {
     fun startSession() {
         val sessionId = _uiState.value.sessionId ?: return
         viewModelScope.launch(Dispatchers.IO) {
-            val baseUrl = _uiState.value.baseUrl
+            val baseUrl = _uiState.value.defaultBaseUrl
             runCatching {
                 backendClient.startSession(baseUrl, sessionId)
             }.onSuccess { snapshot ->
@@ -137,6 +168,15 @@ class HoopViewModel : ViewModel() {
                         sessionCompleted = snapshot.state.sessionCompleted,
                         throwCount = snapshot.state.throws,
                         totalPoints = snapshot.state.totalPoints,
+                        weeklyTotalShots = snapshot.state.throws,
+                        weeklyAccuracyPercent = computeAccuracyPercent(
+                            throws = snapshot.state.throws,
+                            points = snapshot.state.totalPoints
+                        ),
+                        sessionLog = emptyList(),
+                        lastSessionSummary = null,
+                        lastFeedback = "Session started. Good luck!",
+                        lastTarget = "-",
                         statusMessage = "Session started",
                         errorMessage = null
                     )
@@ -152,19 +192,33 @@ class HoopViewModel : ViewModel() {
     fun stopSession() {
         val sessionId = _uiState.value.sessionId ?: return
         viewModelScope.launch(Dispatchers.IO) {
-            val baseUrl = _uiState.value.baseUrl
+            val baseUrl = _uiState.value.defaultBaseUrl
             runCatching {
                 backendClient.stopSession(baseUrl, sessionId)
             }.onSuccess { snapshot ->
                 _uiState.update {
-                    it.copy(
+                    val updated = it.copy(
                         sessionActive = snapshot.state.sessionActive,
                         sessionCompleted = snapshot.state.sessionCompleted,
                         throwCount = snapshot.state.throws,
                         totalPoints = snapshot.state.totalPoints,
+                        weeklyTotalShots = snapshot.state.throws,
+                        weeklyAccuracyPercent = computeAccuracyPercent(
+                            throws = snapshot.state.throws,
+                            points = snapshot.state.totalPoints
+                        ),
+                        lastSessionSummary = SessionResultSummary(
+                            totalThrows = snapshot.state.throws,
+                            totalPoints = snapshot.state.totalPoints,
+                            noMistakeRate = computeAccuracyPercent(
+                                throws = snapshot.state.throws,
+                                points = snapshot.state.totalPoints
+                            ).toDouble()
+                        ),
                         statusMessage = "Session stopped",
                         errorMessage = null
                     )
+                    updated
                 }
             }.onFailure { throwable ->
                 _uiState.update {
@@ -177,7 +231,7 @@ class HoopViewModel : ViewModel() {
     fun resetSession() {
         val sessionId = _uiState.value.sessionId ?: return
         viewModelScope.launch(Dispatchers.IO) {
-            val baseUrl = _uiState.value.baseUrl
+            val baseUrl = _uiState.value.defaultBaseUrl
             runCatching {
                 backendClient.resetSession(baseUrl, sessionId)
             }.onSuccess { snapshot ->
@@ -187,7 +241,14 @@ class HoopViewModel : ViewModel() {
                         sessionCompleted = snapshot.state.sessionCompleted,
                         throwCount = snapshot.state.throws,
                         totalPoints = snapshot.state.totalPoints,
+                        weeklyTotalShots = snapshot.state.throws,
+                        weeklyAccuracyPercent = computeAccuracyPercent(
+                            throws = snapshot.state.throws,
+                            points = snapshot.state.totalPoints
+                        ),
                         cameraConnected = snapshot.camera.connected,
+                        sessionLog = emptyList(),
+                        lastSessionSummary = null,
                         statusMessage = "Session reset",
                         lastFeedback = "Waiting for throw feedback...",
                         lastTarget = "-",
@@ -210,7 +271,7 @@ class HoopViewModel : ViewModel() {
     }
 
     private fun openSockets(sessionId: String) {
-        val baseUrl = _uiState.value.baseUrl
+        val baseUrl = _uiState.value.defaultBaseUrl
 
         eventSocket = backendClient.openEventSocket(
             baseUrl = baseUrl,
@@ -275,7 +336,7 @@ class HoopViewModel : ViewModel() {
 
             eventSocket?.cancel()
             eventSocket = backendClient.openEventSocket(
-                baseUrl = _uiState.value.baseUrl,
+                baseUrl = _uiState.value.defaultBaseUrl,
                 sessionId = sessionId,
                 onEvent = { event -> handleEvent(event) },
                 onOpen = {
@@ -299,7 +360,7 @@ class HoopViewModel : ViewModel() {
 
     private fun refreshSessionSnapshot(sessionId: String) {
         viewModelScope.launch(Dispatchers.IO) {
-            runCatching { backendClient.getSession(_uiState.value.baseUrl, sessionId) }
+            runCatching { backendClient.getSession(_uiState.value.defaultBaseUrl, sessionId) }
                 .onSuccess { snapshot -> applySnapshot(snapshot) }
         }
     }
@@ -312,9 +373,23 @@ class HoopViewModel : ViewModel() {
             is BackendEvent.ThrowEventReceived -> {
                 _uiState.update {
                     val additionalPoints = if (event.event.idx > it.throwCount) event.event.points else 0
+                    val updatedThrows = event.event.idx
+                    val updatedPoints = it.totalPoints + additionalPoints
                     it.copy(
-                        throwCount = event.event.idx,
-                        totalPoints = it.totalPoints + additionalPoints,
+                        throwCount = updatedThrows,
+                        totalPoints = updatedPoints,
+                        weeklyTotalShots = updatedThrows,
+                        weeklyAccuracyPercent = computeAccuracyPercent(
+                            throws = updatedThrows,
+                            points = updatedPoints
+                        ),
+                        sessionLog = it.sessionLog + SessionLogEntry(
+                            throwIndex = event.event.idx,
+                            mistakeTitle = event.event.mistakeTitle,
+                            feedback = event.event.feedback,
+                            target = event.event.target,
+                            points = event.event.points
+                        ),
                         lastFeedback = event.event.feedback,
                         lastTarget = event.event.target,
                         statusMessage = "Throw ${event.event.idx}: ${event.event.mistakeTitle}",
@@ -329,6 +404,13 @@ class HoopViewModel : ViewModel() {
                     it.copy(
                         sessionActive = false,
                         sessionCompleted = true,
+                        weeklyTotalShots = event.summary.totalThrows,
+                        weeklyAccuracyPercent = event.summary.noMistakeRate.roundToInt().coerceIn(0, 100),
+                        lastSessionSummary = SessionResultSummary(
+                            totalThrows = event.summary.totalThrows,
+                            totalPoints = event.summary.totalPoints,
+                            noMistakeRate = event.summary.noMistakeRate
+                        ),
                         statusMessage = "Stopped. Points: ${event.summary.totalPoints}",
                         errorMessage = null
                     )
@@ -340,6 +422,13 @@ class HoopViewModel : ViewModel() {
                     it.copy(
                         sessionActive = false,
                         sessionCompleted = true,
+                        weeklyTotalShots = event.summary.totalThrows,
+                        weeklyAccuracyPercent = event.summary.noMistakeRate.roundToInt().coerceIn(0, 100),
+                        lastSessionSummary = SessionResultSummary(
+                            totalThrows = event.summary.totalThrows,
+                            totalPoints = event.summary.totalPoints,
+                            noMistakeRate = event.summary.noMistakeRate
+                        ),
                         statusMessage = "Completed. No-mistake: ${event.summary.noMistakeRate}%",
                         errorMessage = null
                     )
@@ -350,13 +439,18 @@ class HoopViewModel : ViewModel() {
         }
     }
 
-    private fun applySnapshot(snapshot: com.dptphat.hoopmaster.backend.SessionSnapshot) {
+    private fun applySnapshot(snapshot: SessionSnapshot) {
         _uiState.update {
             it.copy(
                 sessionActive = snapshot.state.sessionActive,
                 sessionCompleted = snapshot.state.sessionCompleted,
                 throwCount = snapshot.state.throws,
                 totalPoints = snapshot.state.totalPoints,
+                weeklyTotalShots = snapshot.state.throws,
+                weeklyAccuracyPercent = computeAccuracyPercent(
+                    throws = snapshot.state.throws,
+                    points = snapshot.state.totalPoints
+                ),
                 cameraConnected = snapshot.camera.connected,
                 statusMessage = if (snapshot.state.sessionActive) {
                     "Session running"
@@ -365,6 +459,14 @@ class HoopViewModel : ViewModel() {
                 }
             )
         }
+    }
+
+    private fun computeAccuracyPercent(throws: Int, points: Int): Int {
+        if (throws <= 0) return 0
+        val normalizedPoints = points.coerceAtMost(throws)
+        return ((normalizedPoints.toDouble() / throws.toDouble()) * 100.0)
+            .roundToInt()
+            .coerceIn(0, 100)
     }
 
     private fun maybeSpeak(feedback: String) {
