@@ -2,6 +2,7 @@ package com.dptphat.hoopmaster
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.media.AudioAttributes
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
@@ -33,6 +34,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -86,7 +90,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        textToSpeech = TextToSpeech(this, this)
+        textToSpeech = TextToSpeech(this, this, "com.google.android.tts")
 
         lifecycleScope.launch {
             repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
@@ -107,6 +111,13 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         isTtsReady = if (status == TextToSpeech.SUCCESS) {
             val languageReady = textToSpeech?.setLanguage(Locale.US) != TextToSpeech.LANG_MISSING_DATA
             textToSpeech?.setSpeechRate(0.95f)
+            textToSpeech?.setPitch(1.0f)
+            textToSpeech?.setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build()
+            )
             textToSpeech?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                 override fun onStart(utteranceId: String?) = Unit
 
@@ -126,19 +137,20 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     }
 
     private fun speak(text: String) {
-        if (text.isBlank()) return
+        val normalizedText = text.trim().replace("\\s+".toRegex(), " ")
+        if (normalizedText.isBlank()) return
         if (!isTtsReady) return
 
         synchronized(this) {
             if (isSpeaking) {
                 // Keep only the latest coaching sentence to avoid long queued audio.
-                pendingSpeech = text
+                pendingSpeech = normalizedText
                 return
             }
             isSpeaking = true
         }
 
-        textToSpeech?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "hoop_feedback_${System.nanoTime()}")
+        enqueueSpeech(normalizedText, addInterUtteranceGap = false)
     }
 
     private fun onSpeechCompleted() {
@@ -153,7 +165,24 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
             isSpeaking = true
         }
 
-        textToSpeech?.speak(nextSpeech, TextToSpeech.QUEUE_FLUSH, null, "hoop_feedback_${System.nanoTime()}")
+        val phrase = nextSpeech ?: return
+        enqueueSpeech(phrase, addInterUtteranceGap = true)
+    }
+
+    private fun enqueueSpeech(text: String, addInterUtteranceGap: Boolean) {
+        val tts = textToSpeech
+        if (tts == null) {
+            synchronized(this) {
+                isSpeaking = false
+                pendingSpeech = null
+            }
+            return
+        }
+
+        if (addInterUtteranceGap) {
+            tts.playSilentUtterance(80L, TextToSpeech.QUEUE_ADD, "speech_gap_${System.nanoTime()}")
+        }
+        tts.speak(text, TextToSpeech.QUEUE_ADD, null, "hoop_feedback_${System.nanoTime()}")
     }
 
     override fun onDestroy() {
@@ -235,7 +264,7 @@ private fun HomeScreen(
                 NavigationBarItem(
                     selected = true,
                     onClick = {},
-                    icon = { Icon(painterResource(id = android.R.drawable.ic_menu_view), contentDescription = "Home") },
+                    icon = { Icon(Icons.Filled.Home, contentDescription = "Home") },
                     label = { Text("Home") }
                 )
                 NavigationBarItem(
@@ -247,7 +276,7 @@ private fun HomeScreen(
                 NavigationBarItem(
                     selected = false,
                     onClick = {},
-                    icon = { Icon(painterResource(id = android.R.drawable.ic_menu_myplaces), contentDescription = "Profile") },
+                    icon = { Icon(Icons.Filled.Person, contentDescription = "Profile") },
                     label = { Text("Profile") }
                 )
             }
