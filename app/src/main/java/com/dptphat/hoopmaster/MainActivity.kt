@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
 import android.util.Size
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -79,6 +80,8 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     private val viewModel: HoopViewModel by viewModels()
     private var textToSpeech: TextToSpeech? = null
     private var isTtsReady: Boolean = false
+    private var isSpeaking: Boolean = false
+    private var pendingSpeech: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -102,7 +105,21 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
 
     override fun onInit(status: Int) {
         isTtsReady = if (status == TextToSpeech.SUCCESS) {
-            textToSpeech?.setLanguage(Locale.US) != TextToSpeech.LANG_MISSING_DATA
+            val languageReady = textToSpeech?.setLanguage(Locale.US) != TextToSpeech.LANG_MISSING_DATA
+            textToSpeech?.setSpeechRate(0.95f)
+            textToSpeech?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                override fun onStart(utteranceId: String?) = Unit
+
+                override fun onDone(utteranceId: String?) {
+                    runOnUiThread { onSpeechCompleted() }
+                }
+
+                @Deprecated("Deprecated in Java")
+                override fun onError(utteranceId: String?) {
+                    runOnUiThread { onSpeechCompleted() }
+                }
+            })
+            languageReady
         } else {
             false
         }
@@ -111,7 +128,32 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     private fun speak(text: String) {
         if (text.isBlank()) return
         if (!isTtsReady) return
-        textToSpeech?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "hoop_feedback")
+
+        synchronized(this) {
+            if (isSpeaking) {
+                // Keep only the latest coaching sentence to avoid long queued audio.
+                pendingSpeech = text
+                return
+            }
+            isSpeaking = true
+        }
+
+        textToSpeech?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "hoop_feedback_${System.nanoTime()}")
+    }
+
+    private fun onSpeechCompleted() {
+        val nextSpeech: String?
+        synchronized(this) {
+            isSpeaking = false
+            nextSpeech = pendingSpeech
+            pendingSpeech = null
+            if (nextSpeech.isNullOrBlank()) {
+                return
+            }
+            isSpeaking = true
+        }
+
+        textToSpeech?.speak(nextSpeech, TextToSpeech.QUEUE_FLUSH, null, "hoop_feedback_${System.nanoTime()}")
     }
 
     override fun onDestroy() {
@@ -120,14 +162,16 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         textToSpeech?.shutdown()
         textToSpeech = null
         isTtsReady = false
+        isSpeaking = false
+        pendingSpeech = null
     }
 }
 
 private object AppRoute {
-    const val Home = "home"
-    const val VolumeTest = "volume_test"
-    const val CurrentSession = "current_session"
-    const val SessionResults = "session_results"
+    const val HOME = "home"
+    const val VOLUME_TEST = "volume_test"
+    const val CURRENT_SESSION = "current_session"
+    const val SESSION_RESULTS = "session_results"
 }
 
 @Composable
@@ -137,38 +181,38 @@ private fun HoopMasterApp(viewModel: HoopViewModel) {
 
     NavHost(
         navController = navController,
-        startDestination = AppRoute.Home
+        startDestination = AppRoute.HOME
     ) {
-        composable(AppRoute.Home) {
+        composable(AppRoute.HOME) {
             HomeScreen(
                 state = state,
                 onNewPractice = {
                     viewModel.disconnect()
-                    navController.navigate(AppRoute.VolumeTest)
+                    navController.navigate(AppRoute.VOLUME_TEST)
                 }
             )
         }
-        composable(AppRoute.VolumeTest) {
-            VolumeTestScreen(onSkip = { navController.navigate(AppRoute.CurrentSession) })
+        composable(AppRoute.VOLUME_TEST) {
+            VolumeTestScreen(onSkip = { navController.navigate(AppRoute.CURRENT_SESSION) })
         }
-        composable(AppRoute.CurrentSession) {
+        composable(AppRoute.CURRENT_SESSION) {
             CurrentSessionScreen(
                 state = state,
                 viewModel = viewModel,
                 onSessionStopped = {
-                    navController.navigate(AppRoute.SessionResults) {
-                        popUpTo(AppRoute.CurrentSession) { inclusive = true }
+                    navController.navigate(AppRoute.SESSION_RESULTS) {
+                        popUpTo(AppRoute.CURRENT_SESSION) { inclusive = true }
                     }
                 }
             )
         }
-        composable(AppRoute.SessionResults) {
+        composable(AppRoute.SESSION_RESULTS) {
             SessionResultsScreen(
                 state = state,
                 onHome = {
                     viewModel.disconnect()
-                    navController.navigate(AppRoute.Home) {
-                        popUpTo(AppRoute.Home) { inclusive = true }
+                    navController.navigate(AppRoute.HOME) {
+                        popUpTo(AppRoute.HOME) { inclusive = true }
                         launchSingleTop = true
                     }
                 }
@@ -352,7 +396,7 @@ private fun CurrentSessionScreen(
         contract = ActivityResultContracts.RequestPermission(),
         onResult = { granted -> hasCameraPermission = granted }
     )
-    var waitingForStop by remember { mutableStateOf(false) }
+    var hasNavigatedToResults by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         if (!hasCameraPermission) {
@@ -367,9 +411,14 @@ private fun CurrentSessionScreen(
         }
     }
 
-    LaunchedEffect(waitingForStop, state.sessionActive, state.sessionCompleted) {
-        if (waitingForStop && !state.sessionActive && state.sessionCompleted) {
-            waitingForStop = false
+    LaunchedEffect(state.sessionCompleted, state.sessionActive) {
+        if (!state.sessionCompleted) {
+            hasNavigatedToResults = false
+            return@LaunchedEffect
+        }
+
+        if (!state.sessionActive && !hasNavigatedToResults) {
+            hasNavigatedToResults = true
             onSessionStopped()
         }
     }
@@ -425,7 +474,6 @@ private fun CurrentSessionScreen(
                 Button(
                     onClick = {
                         if (state.sessionActive) {
-                            waitingForStop = true
                             viewModel.stopSession()
                         } else {
                             viewModel.startSession()
@@ -639,10 +687,16 @@ private fun bindCameraUseCases(
         }
     }
 
+    val cameraSelector = when {
+        cameraProvider.hasCamera(CameraSelector.DEFAULT_FRONT_CAMERA) -> CameraSelector.DEFAULT_FRONT_CAMERA
+        cameraProvider.hasCamera(CameraSelector.DEFAULT_BACK_CAMERA) -> CameraSelector.DEFAULT_BACK_CAMERA
+        else -> CameraSelector.DEFAULT_BACK_CAMERA
+    }
+
     cameraProvider.unbindAll()
     cameraProvider.bindToLifecycle(
         lifecycleOwner,
-        CameraSelector.DEFAULT_BACK_CAMERA,
+        cameraSelector,
         preview,
         analysis
     )

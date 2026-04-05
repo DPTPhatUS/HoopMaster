@@ -472,8 +472,9 @@ class HoopViewModel : ViewModel() {
     private fun maybeSpeak(feedback: String) {
         if (feedback.isBlank()) return
         val now = System.currentTimeMillis()
-        val recentlySpoken = feedback == lastSpokenFeedback && (now - lastSpokenAtMillis) < 1500
-        if (recentlySpoken) return
+        val tooSoon = (now - lastSpokenAtMillis) < 2200
+        val recentlySpoken = feedback == lastSpokenFeedback && (now - lastSpokenAtMillis) < 3500
+        if (tooSoon || recentlySpoken) return
 
         lastSpokenFeedback = feedback
         lastSpokenAtMillis = now
