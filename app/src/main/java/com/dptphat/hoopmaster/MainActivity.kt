@@ -34,7 +34,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material3.Button
@@ -75,6 +78,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.dptphat.hoopmaster.camera.imageProxyToJpeg
 import com.dptphat.hoopmaster.ui.theme.HoopMasterTheme
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.Locale
 import java.util.concurrent.Executors
@@ -110,7 +114,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     override fun onInit(status: Int) {
         isTtsReady = if (status == TextToSpeech.SUCCESS) {
             val languageReady = textToSpeech?.setLanguage(Locale.US) != TextToSpeech.LANG_MISSING_DATA
-            textToSpeech?.setSpeechRate(0.95f)
+            textToSpeech?.setSpeechRate(0.66f)
             textToSpeech?.setPitch(1.0f)
             textToSpeech?.setAudioAttributes(
                 AudioAttributes.Builder()
@@ -426,6 +430,24 @@ private fun CurrentSessionScreen(
         onResult = { granted -> hasCameraPermission = granted }
     )
     var hasNavigatedToResults by remember { mutableStateOf(false) }
+    var showGoodShotFlash by remember { mutableStateOf(false) }
+    val goodShotFlashAlpha by animateFloatAsState(
+        targetValue = if (showGoodShotFlash) 1f else 0f,
+        animationSpec = tween(durationMillis = 350),
+        label = "goodShotFlashAlpha"
+    )
+
+    LaunchedEffect(state.throwCount) {
+        val latestEntry = state.sessionLog.lastOrNull()
+        val isGoodShot = latestEntry?.throwIndex == state.throwCount &&
+            latestEntry.mistakeTitle.equals("No mistake detected", ignoreCase = true)
+
+        if (isGoodShot) {
+            showGoodShotFlash = true
+            delay(900)
+        }
+        showGoodShotFlash = false
+    }
 
     LaunchedEffect(Unit) {
         if (!hasCameraPermission) {
@@ -469,6 +491,22 @@ private fun CurrentSessionScreen(
             )
         }
 
+        if (goodShotFlashAlpha > 0f) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color(0xFF4ADE80).copy(alpha = 0.55f * goodShotFlashAlpha)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.CheckCircle,
+                    contentDescription = "Good shot",
+                    tint = Color.White.copy(alpha = goodShotFlashAlpha),
+                    modifier = Modifier.size(120.dp)
+                )
+            }
+        }
+
         Surface(
             modifier = Modifier
                 .fillMaxWidth()
@@ -482,6 +520,13 @@ private fun CurrentSessionScreen(
                 Text(text = "Hoop Master", style = MaterialTheme.typography.titleLarge, color = Color.White)
                 Text(text = "Status: ${state.statusMessage}", color = Color(0xFFD3E3FF))
                 Text(text = "Throws: ${state.throwCount} | Points: ${state.totalPoints}", color = Color(0xFFC7D2FE))
+                if (showGoodShotFlash) {
+                    Text(
+                        text = "Great shot!",
+                        color = Color(0xFF86EFAC),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
             }
         }
 
